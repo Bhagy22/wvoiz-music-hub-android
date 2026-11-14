@@ -34,7 +34,13 @@ android {
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig signingConfigs.release
+            // Only sign in-build when a keystore is configured (local builds).
+            // CI has no keystore.properties: leave the config unassigned so
+            // AGP produces app-release-unsigned.apk; an empty assigned config
+            // fails packageRelease ("missing required property storeFile").
+            if (keystorePropsFile.exists()) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 
