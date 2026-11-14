@@ -1,8 +1,14 @@
 package com.wvoiz.musichub;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.Signature;
+import android.content.pm.SigningInfo;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Message;
 import android.view.KeyEvent;
@@ -14,6 +20,8 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 
+import java.security.MessageDigest;
+
 public class MainActivity extends Activity {
 
     private WebView webView;
@@ -23,6 +31,47 @@ public class MainActivity extends Activity {
 
     private static final String HOME_URL = "https://wvoiz-music-hub.edgeone.dev/";
     private static final String HOME_HOST = "wvoiz-music-hub.edgeone.dev";
+
+    // SHA-256 digest of the official Wvoiz release signing certificate.
+    // If the app was re-signed by anyone else (a tampered clone), the digest
+    // will not match and the app refuses to load the site.
+    private static final String OFFICIAL_CERT_SHA256 =
+            "1dceeea2b706b28ce4a28101446d6abab5fd8bca2c833bd1240a0eba1b7b3589";
+
+    /** True when the app carries the official signature (or it cannot be read). */
+    private boolean hasOfficialSignature() {
+        try {
+            PackageInfo info;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                info = getPackageManager().getPackageInfo(getPackageName(),
+                        PackageManager.GET_SIGNING_CERTIFICATES);
+                SigningInfo signingInfo = info.signingInfo;
+                if (signingInfo == null) return true;
+                Signature[] sigs = signingInfo.hasMultipleSigners()
+                        ? signingInfo.getApkContentsSigners()
+                        : signingInfo.getSigningCertificateHistory();
+                if (sigs == null || sigs.length == 0) return true;
+                return OFFICIAL_CERT_SHA256.equals(sha256Hex(sigs[0].toByteArray()));
+            } else {
+                info = getPackageManager().getPackageInfo(getPackageName(),
+                        PackageManager.GET_SIGNATURES);
+                if (info.signatures == null || info.signatures.length == 0) return true;
+                return OFFICIAL_CERT_SHA256.equals(sha256Hex(info.signatures[0].toByteArray()));
+            }
+        } catch (Exception e) {
+            return true; // never lock the real app out over a read failure
+        }
+    }
+
+    private static String sha256Hex(byte[] data) throws Exception {
+        byte[] digest = MessageDigest.getInstance("SHA-256").digest(data);
+        StringBuilder sb = new StringBuilder(digest.length * 2);
+        for (byte b : digest) {
+            sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+            sb.append(Character.forDigit(b & 0xF, 16));
+        }
+        return sb.toString();
+    }
 
     private boolean isHomeHost(Uri url) {
         String host = url.getHost();
@@ -39,6 +88,19 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // Anti-clone guard: a re-signed copy is not the official app.
+        if (!hasOfficialSignature()) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Not the official app")
+                    .setMessage("This copy of Wvoiz Music Hub was not signed by Wvoiz "
+                            + "and may have been tampered with. Please get the official "
+                            + "app from Wvoiz directly.")
+                    .setCancelable(false)
+                    .setPositiveButton("Close", (dialog, which) -> finish())
+                    .show();
+            return;
+        }
 
         FrameLayout root = new FrameLayout(this);
         webView = new WebView(this);
@@ -61,8 +123,18 @@ public class MainActivity extends Activity {
         s.setUseWideViewPort(true);
         s.setBuiltInZoomControls(false);
         s.setDisplayZoomControls(false);
-        s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
+        // Safety hardening: the site needs JS + DOM storage only. Everything
+        // a web page could use to reach the phone stays off.
+        s.setAllowFileAccess(false);
+        s.setAllowContentAccess(false);
+        s.setAllowFileAccessFromFileURLs(false);
+        s.setAllowUniversalAccessFromFileURLs(false);
+        s.setSavePassword(false);
+        s.setSaveFormData(false);
+        s.setGeolocationEnabled(false);
+        s.setSafeBrowsingEnabled(true);
+        s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         webView.setBackgroundColor(0xFF0A0B0F);
 
         webView.setWebViewClient(new WebViewClient() {
